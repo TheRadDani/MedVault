@@ -1,0 +1,143 @@
+version: '3.9'
+
+# Production-ready RAG pipeline with Ollama and Streamlit
+# Updated: Feb 2026 - Using latest APIs and Docker Compose best practices
+
+services:
+  # Ollama LLM infra - with GPU support
+  ollama:
+    image: ollama/ollama:2.6.0  # Pinned version for reproducibility
+    container_name: medvault_ollama
+    restart: unless-stopped
+    
+    # GPU support - works with docker-compose v1.28+
+    gpus:
+      - driver: nvidia
+        count: all  # Use all available GPUs
+        capabilities: [compute, utility]  # Compute + memory bandwidth
+    
+    # Ports
+    ports:
+      - "11434:11434"  # Ollama API endpoint
+    
+    # Persistent model storage
+    volumes:
+      - ollama_data:/root/.ollama
+      - ./models:/models  # Optional: mount custom models
+    
+    # Health check - ensures app waits for Ollama readiness
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    
+    # Environment - production-grade settings
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434  # Listen on all interfaces inside container
+      OLLAMA_NUM_PARALLEL: 4  # Parallel request handling
+      OLLAMA_NUM_GPU: -1  # Use all available VRAM
+      OLLAMA_KEEP_ALIVE: 5m  # Keep model in memory 5 minutes after last request
+      CUDA_VISIBLE_DEVICES: 0  # Adjust if using specific GPUs
+    
+    # Resource limits for production stability
+    cpus: '4.0'
+    mem_limit: 16g
+    memswap_limit: 20g  # Allow some swap for stability
+    
+    # Logging configuration with rotation
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+        labels: "service=ollama"
+    
+    # Security: run as non-root if possible
+    user: "1000:1000"  # Adjust based on your Ollama image
+    
+    networks:
+      - mednet
+  
+  # RAG Application (Streamlit)
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PYTHON_VERSION: "3.11"  # Specify Python version
+    image: medvault_app:1.0.0  # Tag for reproducible deployments
+    container_name: medvault_app
+    restart: unless-stopped
+    
+    # Ports
+    ports:
+      - "8501:8501"  # Streamlit default port
+    
+    # Wait for Ollama to be healthy before starting
+    depends_on:
+      ollama:
+        condition: service_healthy
+    
+    # Environment configuration
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434  # Use service name (DNS)
+      STREAMLIT_SERVER_PORT: 8501
+      STREAMLIT_SERVER_HEADLESS: 'true'
+      STREAMLIT_SERVER_RUNONSAVE: 'false'  # Disable auto-reload in prod
+      STREAMLIT_LOGGER_LEVEL: info
+      PYTHONUNBUFFERED: '1'  # Real-time logging
+    
+    # Resource limits
+    cpus: '2.0'
+    mem_limit: 8g
+    
+    # Volumes - use read-only where possible
+    volumes:
+      - ./app:/app:ro  # Read-only app code
+      - ./config:/app/config:ro  # Read-only config
+      - ./data:/data  # Writable data dir (optional)
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+        labels: "service=app"
+    
+    # Security - read-only root filesystem
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    
+    networks:
+      - mednet
+
+# Named volume for persistent Ollama model storage
+volumes:
+  ollama_data:
+    driver: local
+
+# Network for service communication
+networks:
+  mednet:
+    driver: bridge
+    driver_opts:
+      com.docker.network.driver.mtu: 9000  # Jumbo frames for performance (if supported)
