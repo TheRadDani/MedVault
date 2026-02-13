@@ -10,8 +10,12 @@ requests>=2.31.0
 ollama>=0.0.14
 
 # RAG / Vector Search
-langchain>=0.1.0
-langchain-community>=0.0.10
+langchain==0.1.16
+langchain-community==0.0.32
+langchain-core==0.1.42
+langchain-text-splitters==0.0.1
+sentence-transformers==2.6.1
+rank_bm25==0.2.2
 chromadb>=0.4.0
 
 # Embeddings
@@ -31,3 +35,10 @@ python-json-logger>=2.0.0
 
 # API Health Checks
 health-check-lib>=1.0.0
+
+# Generate synthetic data for testing
+faker==24.4.0
+pypdf==4.2.0
+
+loguru==0.7.2
+watchdog==4.0.0
