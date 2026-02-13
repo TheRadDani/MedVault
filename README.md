@@ -22,7 +22,7 @@ A scalable, GPU-accelerated Retrieval-Augmented Generation (RAG) pipeline combin
 ### 1. Clone & Configure
 ```bash
 cd MedVault
-cp .env.example .env
+cp .env.production .env
 # Edit .env if needed (model names, GPU settings, etc.)
 ```
 
@@ -72,7 +72,7 @@ docker-compose exec ollama ollama pull bge-small
 - **[PRODUCTION_GUIDE.md](./PRODUCTION_GUIDE.md)** - Full deployment guide, tuning, troubleshooting
 - **[docker-compose.yml](./docker-compose.yml)** - Service config (Ollama + App)
 - **[Dockerfile](./Dockerfile)** - Multi-stage app build
-- **[.env.example](./.env.example)** - Configuration template
+- **[.env.production](./.env.production)** - Configuration template
 
 ## Configuration
 

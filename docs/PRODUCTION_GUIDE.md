@@ -31,7 +31,7 @@ docker run --rm --gpus all nvidia/cuda:12.1.1-base-ubuntu22.04 nvidia-smi
 ### 1. Setup Environment
 ```bash
 cd MedVault
-cp .env.example .env  # Customize if needed
+cp .env.production .env  # Customize if needed
 ```
 
 ### 2. Build the App Image
