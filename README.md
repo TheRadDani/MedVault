@@ -69,7 +69,7 @@ docker-compose exec ollama ollama pull bge-small
 
 ## Documentation
 
-- **[PRODUCTION_GUIDE.md](./PRODUCTION_GUIDE.md)** - Full deployment guide, tuning, troubleshooting
+- **[PRODUCTION_GUIDE.md](./docs/PRODUCTION_GUIDE.md)** - Full deployment guide, tuning, troubleshooting
 - **[docker-compose.yml](./docker-compose.yml)** - Service config (Ollama + App)
 - **[Dockerfile](./Dockerfile)** - Multi-stage app build
 - **[.env.production](./.env.production)** - Configuration template
@@ -145,7 +145,7 @@ docker stats medvault_ollama  # Check usage
 # Reduce OLLAMA_NUM_PARALLEL or use smaller model
 ```
 
-**See [PRODUCTION_GUIDE.md](./PRODUCTION_GUIDE.md#troubleshooting) for detailed solutions.**
+**See [PRODUCTION_GUIDE.md](./docs/PRODUCTION_GUIDE.md#troubleshooting) for detailed solutions.**
 
 ## Security
 
@@ -155,7 +155,7 @@ docker stats medvault_ollama  # Check usage
 ✅ No privilege escalation  
 ✅ Pinned image versions  
 
-See **[PRODUCTION_GUIDE.md](./PRODUCTION_GUIDE.md#security-hardening-optional)** for hardening options.
+See **[PRODUCTION_GUIDE.md](./docs/PRODUCTION_GUIDE.md#security-hardening-optional)** for hardening options.
 
 ## API Reference
 
