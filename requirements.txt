@@ -38,9 +38,6 @@ python-json-logger>=2.0.0
 # Security & Encryption
 cryptography>=41.0.0
 
-# API Health Checks
-health-check-lib>=1.0.0
-
 # Generate synthetic data for testing
 faker==24.4.0
 pypdf==4.2.0
