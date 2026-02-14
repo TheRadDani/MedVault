@@ -6,15 +6,12 @@ version: '3.9'
 services:
   # Ollama LLM infra - with GPU support
   ollama:
-    image: ollama/ollama:2.6.0  # Pinned version for reproducibility
+    image: ollama/ollama:latest  # Using latest stable version (2.6.0 not available on Docker Hub)
     container_name: medvault_ollama
     restart: unless-stopped
     
-    # GPU support - works with docker-compose v1.28+
-    gpus:
-      - driver: nvidia
-        count: all  # Use all available GPUs
-        capabilities: [compute, utility]  # Compute + memory bandwidth
+    # GPU support - using runtime instead of gpus option for compatibility
+    runtime: nvidia  # Requires: nvidia-docker2 installed on host
     
     # Ports
     ports:
@@ -27,7 +24,7 @@ services:
     
     # Health check - ensures app waits for Ollama readiness
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/11434"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -95,13 +92,12 @@ services:
     
     # Volumes - use read-only where possible
     volumes:
-      - ./app:/app:ro  # Read-only app code
-      - ./config:/app/config:ro  # Read-only config
-      - ./data:/data  # Writable data dir (optional)
+      - ./app:/app  # App code
+      - ./data:/data  # Writable data dir
     
     # Health check
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/8501"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -139,5 +135,3 @@ volumes:
 networks:
   mednet:
     driver: bridge
-    driver_opts:
-      com.docker.network.driver.mtu: 9000  # Jumbo frames for performance (if supported)

@@ -1,6 +1,6 @@
 # Multi-stage build for minimal production image
 # Stage 1: Builder
-FROM python:3.11-slim as builder
+FROM python:3.11-slim AS builder
 
 WORKDIR /build
 
@@ -35,7 +35,7 @@ COPY --from=builder --chown=appuser:appuser /root/.local /home/appuser/.local
 
 # Set PATH to include user-local bin
 ENV PATH=/home/appuser/.local/bin:$PATH \
-    PYTHONPATH=/app:$PYTHONPATH \
+    PYTHONPATH=/app \
     PYTHONUNBUFFERED=1
 
 # Copy application code
