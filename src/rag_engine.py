@@ -2,10 +2,11 @@
 MedVault RAG Engine - Production-ready Retrieval-Augmented Generation pipeline.
 
 Latest LangChain APIs (0.2.0+) with Ollama integration, hybrid retrieval,
-error handling, and comprehensive logging.
+error handling, comprehensive logging, and data encryption support.
 """
 
 import os
+import requests
 from typing import Optional, Tuple, List, Any
 from functools import lru_cache
 from pathlib import Path
@@ -15,16 +16,15 @@ from langchain_community.document_loaders import TextLoader, DirectoryLoader
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain_community.retrievers import BM25Retriever
-from langchain_core.retrievers import BaseRetriever
 from langchain.retrievers import EnsembleRetriever
 from langchain_ollama import ChatOllama  # Latest Ollama integration (0.2.0+)
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassThrough
 from langchain_core.documents import Document
 from loguru import logger
 
 from src.config import config
+from src.encryption import get_encryption_manager
 
 
 class MedVaultRAG:
@@ -59,18 +59,29 @@ class MedVaultRAG:
         self.ensemble_retriever: Optional[EnsembleRetriever] = None
         self.llm: Optional[ChatOllama] = None
         self.embedding_function: Optional[HuggingFaceEmbeddings] = None
+        self.encryption_manager = None  # Initialize encryption manager
         
         logger.info(f"MedVaultRAG initialized | Model: {self.cfg.ollama_model}")
         self._initialize_components()
     
     def _initialize_components(self):
-        """Initialize LLM and embeddings with error handling."""
+        """Initialize LLM, embeddings, and encryption with error handling."""
         try:
             # Initialize embeddings
             logger.debug(f"Loading embeddings: {self.cfg.embedding_model}")
+            
+            # Try to auto-detect GPU, fall back to CPU if not available
+            try:
+                import torch
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+                logger.debug(f"Using device: {device}")
+            except ImportError:
+                device = "cpu"
+                logger.debug("PyTorch not available, using CPU")
+            
             self.embedding_function = HuggingFaceEmbeddings(
                 model_name=self.cfg.embedding_model,
-                model_kwargs={"device": "cuda"}  # Auto-detects GPU if available
+                model_kwargs={"device": device}
             )
             
             # Initialize LLM with timeout and retry
@@ -85,6 +96,9 @@ class MedVaultRAG:
                 callback_manager=None,  # Can add observability here
             )
             
+            # Initialize encryption manager for encrypted data handling
+            self._initialize_encryption()
+            
             # Test Ollama connection
             self._test_ollama_connection()
             logger.info("Components initialized successfully")
@@ -93,55 +107,151 @@ class MedVaultRAG:
             logger.error(f"Failed to initialize components: {e}")
             raise
     
+    def _initialize_encryption(self):
+        """Initialize encryption manager for decryption during ingestion."""
+        try:
+            self.encryption_manager = get_encryption_manager()
+            if self.encryption_manager.encryption_enabled:
+                logger.info("Encryption manager initialized - encrypted data support enabled")
+            else:
+                logger.info("Encryption disabled - plaintext-only mode")
+        except Exception as e:
+            logger.warning(f"Failed to initialize encryption manager: {e}")
+            # Don't fail initialization, just continue without encryption
+            self.encryption_manager = None
+    
     def _test_ollama_connection(self) -> bool:
         """Test connectivity to Ollama service."""
         try:
-            response = self.llm.invoke("Test connection")
-            logger.debug("Ollama connection test passed")
-            return True
+            # Use HTTP request to check if Ollama is responding
+            response = requests.get(
+                f"{self.cfg.ollama_base_url}/api/tags",
+                timeout=5
+            )
+            is_connected = response.status_code == 200
+            if is_connected:
+                logger.debug("Ollama connection test passed")
+            else:
+                logger.warning(f"Ollama returned unexpected status {response.status_code}")
+            return is_connected
+        except requests.exceptions.Timeout:
+            logger.warning("Ollama connection test timed out")
+            return False
+        except requests.exceptions.ConnectionError:
+            logger.warning("Failed to connect to Ollama - connection error")
+            return False
         except Exception as e:
             logger.warning(f"Ollama connection test failed: {e}")
             return False
     
-    def ingest(self, data_path: Optional[str] = None, force_reindex: bool = False) -> bool:
+    def _load_documents_with_decryption(self, data_path: str) -> List[Document]:
         """
-        Load documents, chunk them, embed them, and persist to vector store.
+        Load documents from directory, decrypting encrypted files in memory.
+        
+        Supports both:
+        - Plaintext files (*.txt) - loaded directly
+        - Encrypted files (*.txt) - decrypted in memory before chunking
         
         Args:
-            data_path: Override default data path
+            data_path: Directory containing plaintext or encrypted files
+        
+        Returns:
+            List of Document objects with content from both plaintext and encrypted files
+        """
+        documents = []
+        failed_files = []
+        
+        try:
+            data_dir = Path(data_path)
+            
+            # Load plaintext documents
+            txt_files = list(data_dir.glob("*.txt"))
+            
+            if not txt_files:
+                logger.warning(f"No .txt files found in {data_path}")
+                return documents
+            
+            for file_path in txt_files:
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        content = f.read()
+                    
+                    # Try to decrypt if encryption is enabled
+                    if self.encryption_manager and self.encryption_manager.encryption_enabled:
+                        try:
+                            content = self.encryption_manager.decrypt_text(content)
+                            logger.debug(f"Decrypted in memory: {file_path.name}")
+                        except Exception as decrypt_error:
+                            # File not encrypted or decryption failed, use as-is
+                            logger.debug(f"Treating {file_path.name} as plaintext (decryption failed: {decrypt_error})")
+                    
+                    # Create LangChain Document
+                    doc = Document(
+                        page_content=content,
+                        metadata={"source": str(file_path)}
+                    )
+                    documents.append(doc)
+                    logger.debug(f"Loaded document: {file_path.name}")
+                
+                except Exception as e:
+                    logger.warning(f"Failed to load {file_path.name}: {e}")
+                    failed_files.append(str(file_path))
+            
+            logger.info(f"Loaded {len(documents)} documents (failed: {len(failed_files)})")
+            if failed_files:
+                logger.warning(f"Failed files: {failed_files}")
+            
+            return documents
+        
+        except Exception as e:
+            logger.error(f"Document loading failed: {e}", exc_info=True)
+            return documents
+    
+    def ingest(
+        self,
+        data_path: Optional[str] = None,
+        encrypted_path: Optional[str] = None,
+        force_reindex: bool = False
+    ) -> bool:
+        """
+        Load documents (plaintext or encrypted), chunk them, embed, and persist to vector store.
+        
+        Encrypted files are decrypted only in memory, never written back to disk.
+        
+        Args:
+            data_path: Path to plaintext documents (or try encrypted path)
+            encrypted_path: Path to encrypted documents (tries encryption first)
             force_reindex: Force reindexing even if vector store exists
         
         Returns:
             bool: Success status
         """
         try:
-            data_path = data_path or self.cfg.data_path
+            # Determine which path to use
+            if encrypted_path and os.path.exists(encrypted_path):
+                ingest_path = encrypted_path
+                logger.info(f"Ingesting encrypted documents from: {ingest_path}")
+            else:
+                ingest_path = data_path or self.cfg.data_path
+                logger.info(f"Ingesting documents from: {ingest_path}")
             
             # Validate data path
-            if not os.path.exists(data_path):
-                logger.warning(f"Data path does not exist: {data_path}")
-                logger.info(f"Creating data directory: {data_path}")
-                os.makedirs(data_path, exist_ok=True)
+            if not os.path.exists(ingest_path):
+                logger.warning(f"Data path does not exist: {ingest_path}")
+                logger.info(f"Creating data directory: {ingest_path}")
+                os.makedirs(ingest_path, exist_ok=True)
                 return False
             
             # Check for existing vector store
             if os.path.exists(self.cfg.vector_store_path) and not force_reindex:
                 logger.info(f"Vector store exists: {self.cfg.vector_store_path}")
-                return self.load_existing()
+                return self.load_existing(data_path=ingest_path)
             
-            logger.info(f"Ingesting documents from: {data_path}")
-            
-            # Load documents
-            loader = DirectoryLoader(
-                data_path,
-                glob="*.txt",
-                loader_cls=TextLoader,
-                show_progress=True
-            )
-            documents = loader.load()
+            # Load documents (with automatic decryption if needed)
+            documents = self._load_documents_with_decryption(ingest_path)
             
             if not documents:
-                logger.warning(f"No documents found in {data_path}")
+                logger.warning(f"No documents loaded from {ingest_path}")
                 return False
             
             logger.info(f"Loaded {len(documents)} documents")
@@ -179,18 +289,26 @@ class MedVaultRAG:
             logger.error(f"Ingestion failed: {e}", exc_info=True)
             return False
     
-    def load_existing(self, data_path: Optional[str] = None) -> bool:
+    def load_existing(self, data_path: Optional[str] = None, encrypted_path: Optional[str] = None) -> bool:
         """
         Load persisted vector store and initialize retrievers.
+        Supports loading BM25 index from plaintext or encrypted documents.
         
         Args:
             data_path: Override default data path for retriever initialization
+            encrypted_path: Path to encrypted documents for BM25 index
         
         Returns:
             bool: Success status
         """
         try:
-            data_path = data_path or self.cfg.data_path
+            # Determine document path
+            if encrypted_path and os.path.exists(encrypted_path):
+                doc_path = encrypted_path
+                logger.info(f"Using encrypted documents: {doc_path}")
+            else:
+                doc_path = data_path or self.cfg.data_path
+            
             vector_store_path = self.cfg.vector_store_path
             
             # Check vector store exists
@@ -209,15 +327,9 @@ class MedVaultRAG:
             
             logger.info("Vector store loaded successfully")
             
-            # Load documents for BM25 retriever
-            if os.path.exists(data_path):
-                loader = DirectoryLoader(
-                    data_path,
-                    glob="*.txt",
-                    loader_cls=TextLoader,
-                    show_progress=False
-                )
-                documents = loader.load()
+            # Load documents for BM25 retriever (with decryption support)
+            if os.path.exists(doc_path):
+                documents = self._load_documents_with_decryption(doc_path)
                 
                 # Rechunk for consistency
                 text_splitter = RecursiveCharacterTextSplitter(
@@ -227,9 +339,9 @@ class MedVaultRAG:
                 chunks = text_splitter.split_documents(documents)
                 
                 self._initialize_retrievers(chunks)
-                logger.info(f"Loaded {len(chunks)} chunks for BM25 retrieval")
+                logger.info(f"Loaded {len(chunks)} chunks for BM25 retrieval (encryption-aware)")
             else:
-                logger.warning(f"Data path not found: {data_path} (vector-only retrieval)")
+                logger.warning(f"Data path not found: {doc_path} (vector-only retrieval)")
             
             return True
             
@@ -245,37 +357,80 @@ class MedVaultRAG:
             chunks: List of document chunks
         """
         try:
+            # Validate chunks
+            if not chunks:
+                logger.warning("No chunks available for retriever initialization")
+                return
+            
             # BM25 Retriever (sparse, keyword-based)
             logger.debug("Initializing BM25 retriever...")
-            bm25_retriever = BM25Retriever.from_documents(chunks)
-            bm25_retriever.k = self.cfg.retriever_k_bm25
+            try:
+                bm25_retriever = BM25Retriever.from_documents(chunks)
+                bm25_retriever.k = self.cfg.retriever_k_bm25
+            except Exception as e:
+                logger.warning(f"BM25 initialization failed: {e}. Continuing with vector-only retrieval.")
+                bm25_retriever = None
             
             # Vector Retriever (dense, semantic)
             logger.debug("Initializing vector retriever...")
-            vector_retriever = self.vector_db.as_retriever(
-                search_kwargs={"k": self.cfg.retriever_k_vector}
-            )
+            if not self.vector_db:
+                logger.warning("Vector DB not initialized - creating from chunks")
+                if not chunks:
+                    logger.error("Cannot create vector store with empty chunks")
+                    return
+                try:
+                    # Create vector store from chunks if not already loaded
+                    self.vector_db = Chroma.from_documents(
+                        chunks,
+                        self.embedding_function,
+                        persist_directory=self.cfg.vector_store_path
+                    )
+                    logger.info("Vector store created from chunks")
+                except Exception as e:
+                    logger.error(f"Failed to create vector store: {e}")
+                    # If we can't create vector store, use BM25 only
+                    if bm25_retriever:
+                        self.ensemble_retriever = bm25_retriever
+                        logger.info("Using BM25-only retrieval (vector store unavailable)")
+                    return
             
-            # Ensemble Retriever (hybrid)
-            self.ensemble_retriever = EnsembleRetriever(
-                retrievers=[bm25_retriever, vector_retriever],
-                weights=[
-                    self.cfg.ensemble_weight_bm25,
-                    self.cfg.ensemble_weight_vector
-                ]
-            )
+            try:
+                vector_retriever = self.vector_db.as_retriever(
+                    search_kwargs={"k": self.cfg.retriever_k_vector}
+                )
+            except Exception as e:
+                logger.error(f"Failed to create vector retriever: {e}")
+                if bm25_retriever:
+                    self.ensemble_retriever = bm25_retriever
+                    logger.info("Falling back to BM25-only retrieval")
+                return
             
-            logger.info(
-                f"Ensemble retriever initialized | "
-                f"BM25 k={self.cfg.retriever_k_bm25} "
-                f"({self.cfg.ensemble_weight_bm25:.0%}) | "
-                f"Vector k={self.cfg.retriever_k_vector} "
-                f"({self.cfg.ensemble_weight_vector:.0%})"
-            )
+            # Ensemble Retriever (hybrid) or fallback to vector-only
+            if bm25_retriever:
+                self.ensemble_retriever = EnsembleRetriever(
+                    retrievers=[bm25_retriever, vector_retriever],
+                    weights=[
+                        self.cfg.ensemble_weight_bm25,
+                        self.cfg.ensemble_weight_vector
+                    ]
+                )
+                logger.info(
+                    f"Ensemble retriever initialized | "
+                    f"BM25 k={self.cfg.retriever_k_bm25} "
+                    f"({self.cfg.ensemble_weight_bm25:.0%}) | "
+                    f"Vector k={self.cfg.retriever_k_vector} "
+                    f"({self.cfg.ensemble_weight_vector:.0%})"
+                )
+            else:
+                # Fallback to vector-only retrieval
+                self.ensemble_retriever = vector_retriever
+                logger.info(
+                    f"Vector-only retriever initialized | "
+                    f"k={self.cfg.retriever_k_vector}"
+                )
             
         except Exception as e:
             logger.error(f"Failed to initialize retrievers: {e}", exc_info=True)
-            raise
     
     @lru_cache(maxsize=128)
     def _get_prompt_template(self) -> ChatPromptTemplate:
@@ -331,7 +486,7 @@ ANSWER:"""
             chain = (
                 {
                     "context": self.ensemble_retriever | self._format_docs,
-                    "question": RunnablePassThrough()
+                    "question": lambda x: x  # Pass through the input as-is
                 }
                 | prompt
                 | self.llm

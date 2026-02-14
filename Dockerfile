@@ -53,4 +53,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 
 # Default entrypoint
 ENTRYPOINT ["streamlit", "run"]
-CMD ["app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+CMD ["app/app.py", "--server.port=8501", "--server.address=0.0.0.0"]

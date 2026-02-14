@@ -3,7 +3,8 @@
 import os
 from pathlib import Path
 from typing import Optional
-from pydantic import BaseSettings, Field, validator
+from pydantic import Field, field_validator, ConfigDict
+from pydantic_settings import BaseSettings
 from loguru import logger
 
 
@@ -97,19 +98,24 @@ class RAGConfig(BaseSettings):
         description="Automatically persist vector store after ingestion"
     )
     
-    class Config:
-        case_sensitive = False
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    # Pydantic v2 configuration
+    model_config = ConfigDict(
+        case_sensitive=False,
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore"  # Ignore extra fields from .env file
+    )
     
-    @validator("ensemble_weight_bm25", "ensemble_weight_vector")
+    @field_validator("ensemble_weight_bm25", "ensemble_weight_vector")
+    @classmethod
     def validate_weights(cls, v):
         """Ensure weights are between 0 and 1."""
         if not 0 <= v <= 1:
             raise ValueError("Weight must be between 0 and 1")
         return v
     
-    @validator("chunk_size")
+    @field_validator("chunk_size")
+    @classmethod
     def validate_chunk_size(cls, v):
         """Ensure chunk size is reasonable."""
         if v < 100 or v > 5000:

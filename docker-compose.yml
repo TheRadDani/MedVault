@@ -1,7 +1,6 @@
 version: '3.9'
 
-# Production-ready RAG pipeline with Ollama and Streamlit
-# Updated: Feb 2026 - Using latest APIs and Docker Compose best practices
+# Updated: Feb 2026
 
 services:
   # Ollama LLM infra - with GPU support
@@ -51,9 +50,6 @@ services:
         max-file: "3"
         labels: "service=ollama"
     
-    # Security: run as non-root if possible
-    user: "1000:1000"  # Adjust based on your Ollama image
-    
     networks:
       - mednet
   
@@ -85,6 +81,7 @@ services:
       STREAMLIT_SERVER_RUNONSAVE: 'false'  # Disable auto-reload in prod
       STREAMLIT_LOGGER_LEVEL: info
       PYTHONUNBUFFERED: '1'  # Real-time logging
+      HF_HOME: /tmp/huggingface  # Cache HuggingFace models in /tmp (tmpfs)
     
     # Resource limits
     cpus: '2.0'
@@ -92,8 +89,10 @@ services:
     
     # Volumes - use read-only where possible
     volumes:
-      - ./app:/app  # App code
-      - ./data:/data  # Writable data dir
+      - ./:/app  # Mount entire project for access to src/, app/, data/
+      - ./data:/app/data  # Writable data directory
+      - ./vector_store:/app/vector_store  # Writable vector store
+      - ./logs:/app/logs  # Writable logs directory
     
     # Health check
     healthcheck:
@@ -111,17 +110,12 @@ services:
         max-file: "3"
         labels: "service=app"
     
-    # Security - read-only root filesystem
-    read_only: true
+    # Tmpfs for Streamlit cache (doesn't need to persist)
     tmpfs:
       - /tmp
       - /run
-    cap_drop:
-      - ALL
-    cap_add:
-      - NET_BIND_SERVICE
-    security_opt:
-      - no-new-privileges:true
+      - /home/appuser/.streamlit
+      - /home/appuser/.cache
     
     networks:
       - mednet
